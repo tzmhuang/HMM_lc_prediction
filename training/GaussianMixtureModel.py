@@ -18,16 +18,23 @@ class GaussianMixtureModel(object):
         # NOTE: obs is 1d np array
         if len(obs) != self.dim:
             Exception("Observation dimetion error")
-        prob = []
-        for i in range(self.k):
-            mu = self.mu[i]
-            sigma = self.sigma[i]
-            a = (((2*np.pi)**self.dim)*np.linalg.det(sigma))**0.5
-            d = obs-mu
-            b = -0.5*np.dot(np.dot(d, np.linalg.inv(sigma)), d)
-            p = 1/a*np.exp(b)
-            prob += [p]
-        return np.dot(self.c, prob)
+        a = (((2*np.pi)**self.dim)*np.linalg.det(self.sigma))**0.5
+        d = obs-self.mu
+        inv_sigma = np.linalg.inv(self.sigma)
+        b = [-0.5*np.dot(np.dot(d[k], inv_sigma[k]), d[k])
+             for k in range(self.k)]
+        return np.dot(self.c, np.exp(b)/a)
+
+    def eval_k(self, obs, k):
+        if len(obs) != self.dim:
+            Exception("Observation dimetion error")
+        mu = self.mu[k]
+        sigma = self.sigma[k]
+        a = (((2*np.pi)**self.dim)*np.linalg.det(sigma))**0.5
+        d = obs-mu
+        b = -0.5*np.dot(np.dot(d, np.linalg.inv(sigma)), d)
+        p = 1/a*np.exp(b)
+        return self.c[k]*p
 
     def get_param(self, k):
         return self.c[k], self.mu[k], self.sigma[k]
@@ -39,6 +46,6 @@ class GaussianMixtureModel(object):
         return
 
     def __repr__(self):
-        s = "GMM with {0} Gaussian mixtures c: {1}| mu: {2}| sigma: {3}\n".format(
+        s = "GMM with {0} Gaussian mixtures c: {1}\n mu: {2}\n sigma: {3}\n".format(
             self.k, self.c, self.mu, self.sigma)
         return s
