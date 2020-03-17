@@ -9,18 +9,22 @@ hmm.initialize(data_dim=2, gmm_k=3)
 print(hmm.A, hmm.B)
 print(hmm)
 
-print("**********Test Foward Porbability **********")
+print("**********Test Emission Porbability **********")
 obs = [[0, 0], [0, 0], [0, 0], [0, 0], [
     0, 0], [0, 0], [0, 0], [0, 0], [0, 0]]
-a = hmm.alpha(obs)
+emission_prob = hmm.emission_prob(obs)
+print("**********Test Foward Porbability **********")
+
+a = hmm.alpha(emission_prob)
 print(a)
 print(sum(a[-1]))
 
 print("**********Test Backward Porbability **********")
-b = hmm.beta(obs)
+b = hmm.beta(emission_prob)
 print(b)
-print(np.dot([hmm.B[i].eval(obs[1]) for i in range(3)], b[0]))
-print(hmm.fwbw_prob(obs, 0))
+print(np.dot(np.array([hmm.B[i].eval(obs)
+                       for i in range(3)]).reshape(-1, 3)[1], b[0]))
+print(hmm.fwbw_prob(obs, 1))
 
 print("**********Test Gamma Calculation **********")
 

@@ -15,24 +15,24 @@ class GaussianMixtureModel(object):
         return
 
     def eval(self, obs):
-        # NOTE: obs is 1d np array
-        if len(obs) != self.dim:
-            Exception("Observation dimetion error")
-        a = (((2*np.pi)**self.dim)*np.linalg.det(self.sigma))**0.5
-        d = obs-self.mu
-        inv_sigma = np.linalg.inv(self.sigma)
-        b = [-0.5*np.dot(np.dot(d[k], inv_sigma[k]), d[k])
-             for k in range(self.k)]
-        return np.dot(self.c, np.exp(b)/a)
+        # NOTE: obs must be nxd array
+        if len(np.shape(obs)) > 1 and np.shape(obs)[1] != self.dim:
+            raise ValueError("Observation dimesion error")
+        elif len(np.shape(obs)) <= 1:
+            raise ValueError("Data needs to be 2D array")
+        return np.sum([self.eval_k(obs, k) for k in range(self.k)], 0)
 
     def eval_k(self, obs, k):
-        if len(obs) != self.dim:
-            Exception("Observation dimetion error")
+        # NOTE: obs must be nxd array
+        if len(np.shape(obs)) > 1 and np.shape(obs)[1] != self.dim:
+            raise ValueError("Observation dimesion error")
+        elif len(np.shape(obs)) <= 1:
+            raise ValueError("Data needs to be 2D array")
         mu = self.mu[k]
         sigma = self.sigma[k]
         a = (((2*np.pi)**self.dim)*np.linalg.det(sigma))**0.5
         d = obs-mu
-        b = -0.5*np.dot(np.dot(d, np.linalg.inv(sigma)), d)
+        b = -0.5*np.diag(d@np.linalg.inv(sigma)@d.T)
         p = 1/a*np.exp(b)
         return self.c[k]*p
 
