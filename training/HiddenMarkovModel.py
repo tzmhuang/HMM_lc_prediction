@@ -1,16 +1,23 @@
+import os
 import numpy as np
+import pickle
+import datetime
 from GaussianMixtureModel import GaussianMixtureModel
 
 eps = 10e-16
+SAVE_DIR = os.path.join(os.path.abspath(
+    os.path.dirname(__file__)), 'saved_models/')
 
 
 class HiddenMarkovModel(object):
     def __init__(self, states={0: 'default'}):
         self.states = states
         self.state_num = len(states)
+        self.initialized = False
         return
 
-    def initialize(self, method='gmm', A=None, B=None, data_dim=1, gmm_k=1):
+    def initialize(self, method='gmm', data_dim=1, gmm_k=1):
+        self.initialized = True
         self.method = method
         self.data_dim = data_dim
         if method == 'gmm':
@@ -31,6 +38,8 @@ class HiddenMarkovModel(object):
         return
 
     def train(self, data, epoch, thresh):
+        if self.initialized == False:
+            raise Exception('Model not initialized')
         if self.method == 'gmm':
             A_e = np.eye(self.state_num)
             C_e = np.zeros((self.state_num, self.gmm_k))
@@ -74,8 +83,8 @@ class HiddenMarkovModel(object):
                     C_e[i] = C_e[i]/c_est_den
                 for s in self.states:
                     C, MU, SIGMA = self.B[s].get_param()
-                    break_flag = break_flag and (np.abs(self.A-A_e) < thresh).all() and (np.abs(C-C_e) < thresh).all(
-                    ) and (np.abs(MU-MU_e) < thresh).all() and (np.abs(SIGMA-SIGMA_e) < thresh).all()
+                    break_flag = break_flag and (np.abs(self.A-A_e[s]) < thresh).all() and (np.abs(C-C_e[s]) < thresh).all(
+                    ) and (np.abs(MU-MU_e[s]) < thresh).all() and (np.abs(SIGMA-SIGMA_e[s]) < thresh).all()
                 print('--> flag <--\n', break_flag)
                 print('--> A_e <--\n', A_e)
                 print('--> C_e <--\n', C_e)
@@ -85,7 +94,7 @@ class HiddenMarkovModel(object):
                     return self.A, C, MU, SIGMA
                 else:
                     self.update_param(
-                        {'A': A_e, 'C': C_e, 'MU': MU_e, 'SIGMA': SIGMA_e})
+                        {'A': A_e, 'B': {'C': C_e, 'MU': MU_e, 'SIGMA': SIGMA_e}})
             return A_e, C_e, MU_e, SIGMA_e
         else:
             raise Exception('No such train method')
@@ -97,9 +106,10 @@ class HiddenMarkovModel(object):
     def update_param(self, param):
         if self.method == "gmm":
             self.A = param['A']
+            B = param['B']
             for s in self.states:
                 self.B[s].set_param(
-                    param['C'][s], param['MU'][s], param['SIGMA'][s])
+                    B['C'][s], B['MU'][s], B['SIGMA'][s])
         else:
             pass
         return
@@ -169,9 +179,6 @@ class HiddenMarkovModel(object):
         num = self.A[i][j]*np.dot(alphas[: -1, i]
                                   * self.B[j].eval(obs)[1:], betas[1:, j])
         den = np.dot(alphas[1], betas[1])
-        # if den < eps:
-        #     print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-        #     return eps
         return num/den
 
     def gmm_gamma(self, obs, j, k, alphas, betas, mode='sum'):
@@ -193,5 +200,64 @@ class HiddenMarkovModel(object):
         else:
             raise Exception('No such mode')
 
+    def save_model(self):
+        if self.initialized == False:
+            raise Exception('Model not initialzed')
+        if self.method == 'gmm':
+            if not os.path.exists(SAVE_DIR):
+                os.makedirs(SAVE_DIR)
+            file_name = os.path.join(
+                SAVE_DIR, datetime.datetime.now().strftime("%Y%m%d_%H%M%S")+'.model')
+            if os.path.exists(file_name):
+                raise Exception("File already exists")
+            model = {}
+            meta = {}
+            meta['method'] = self.method
+            meta['states'] = self.states
+            meta['data_dim'] = self.data_dim
+            meta['gmm_k'] = self.gmm_k
+            param = {}
+            param['A'] = self.A.tolist()
+            C = []
+            MU = []
+            SIGMA = []
+            for s in self.states:
+                c, mu, sigma = self.B[s].get_param()
+                C += [c.tolist()]
+                MU += [mu.tolist()]
+                SIGMA += [sigma.tolist()]
+            param['B'] = {}
+            param['B']['C'] = np.array(C)
+            param['B']['MU'] = np.array(MU)
+            param['B']['SIGMA'] = np.array(SIGMA)
+            model['meta'] = meta
+            model['param'] = param
+            with open(file_name, 'wb') as f:
+                pickle.dump(model, f)
+        else:
+            pass
+        print('Model saved to: ', SAVE_DIR)
+        return
+
+    def load_model(self, load_dir):
+        if self.initialized:
+            raise Exception('Model already initialized')
+        with open(load_dir, 'rb') as f:
+            model = pickle.load(f)
+        meta = model['meta']
+        print(meta)
+        if meta['method'] == 'gmm':
+            self.states = meta['states']
+            self.initialize(method= meta['method'], data_dim=meta['data_dim'], gmm_k=meta['gmm_k'])
+            param = model['param']
+            self.update_param(param)
+        else:
+            raise Exception('Unrecognized method')
+        print('Model loaded from: ', load_dir)
+        return
+
     def __repr__(self):
-        return "Transition Matrix: %s\nEmission: %s" % (self.A, self.B)
+        if self.initialized:
+            return "Transition Matrix: %s\nEmission: %s" % (self.A, self.B)
+        else:
+            return "HMM: Uninitialized"
