@@ -1,5 +1,7 @@
 import os
 import numpy as np
+from sklearn import cluster
+from sklearn.utils import check_array
 import pickle
 import datetime
 from GaussianMixtureModel import GaussianMixtureModel
@@ -10,195 +12,200 @@ SAVE_DIR = os.path.join(os.path.abspath(
 
 
 class HiddenMarkovModel(object):
-    def __init__(self, states={0: 'default'}):
+    def __init__(self, states={0: 'default'}, method='gmm',
+                 data_dim=1, gmm_k=1, random_state=0, min_cov=1e-3, n_iter=20, thresh=10e-4):
         self.states = states
-        self.state_num = len(states)
         self.initialized = False
-        return
-
-    def initialize(self, method='gmm', data_dim=1, gmm_k=1):
-        self.initialized = True
-        self.method = method
         self.data_dim = data_dim
+        self.random_state = random_state
+        self.n_iter = n_iter
+        self.thresh = thresh
         if method == 'gmm':
+            self.method = method
             self.gmm_k = gmm_k
-            self.A = np.ones(
-                (self.state_num, self.state_num))*1/self.state_num
-            # Random Initialization
-            # self.A = np.random.rand(3, 3)
-            # self.A = self.A/np.sum(self.A, 1).reshape(-1, 1)
-            self.B = []
-            for i in self.states:
-                gmm = GaussianMixtureModel(dim=data_dim, k=gmm_k)
-                gmm.initialize()
-                self.B += [gmm]
-
+            self.min_cov = min_cov
+            self.start_prob = np.ones(data_dim)/data_dim
         else:
             raise Exception('No such initialization method')
         return
 
-    def train(self, data, epoch, thresh):
-        if self.initialized == False:
-            raise Exception('Model not initialized')
+    def _init_param(self, X):
+        n_sts = len(self.states)
+        n_mix = self.gmm_k
+        n_dim = self.data_dim
         if self.method == 'gmm':
-            A_e = np.eye(self.state_num)
-            C_e = np.zeros((self.state_num, self.gmm_k))
-            MU_e = np.zeros(
-                (self.state_num, self.gmm_k, self.data_dim))
-            SIGMA_e = np.zeros(
-                (self.state_num, self.gmm_k, self.data_dim, self.data_dim))
-            break_flag = False
-            for e in range(epoch):
-                print("===> Epoch = {0} <===".format(e))
-                # A_e: state transition matrix est
-                emission_prob = self.emission_prob(data)
-                # alphas = self.alpha(emission_prob)
-                # betas = self.beta(emission_prob)
-                alphas, nc = self.normalized_alpha(emission_prob)
-                betas = self.normalized_beta(emission_prob, nc)
-                print('--> EMISSION <--\n', emission_prob)
-                print('--> alphas <--\n', alphas)
-                print('--> betas <--\n', betas)
-                print('--> Normalizing Constant <--\n', nc)
-                for i in self.states:
-                    den = sum([self.xi(data, i, k, alphas, betas)
-                               for k in self.states])
-                    print('--> {0} den: {1} <--\n'.format(i, den))
-                    for j in self.states:
-                        A_e[i][j] = self.xi(data, i, j, alphas, betas)
-                    A_e[i] = A_e[i]/den
-                    c_est_den = np.sum([self.gmm_gamma(data, i, kk, alphas, betas)
-                                        for kk in range(self.gmm_k)])
-                    for k in range(self.gmm_k):
-                        gamma_sum = self.gmm_gamma(
-                            data, i, k, alphas, betas)
-                        mu_est_num = self.gmm_gamma(
-                            data, i, k, alphas, betas, mode='mu_est')
-                        sigma_est_num = self.gmm_gamma(
-                            data, i, k, alphas, betas, mode='sigma_est')
-                        C_e[i][k] = gamma_sum
-                        MU_e[i][k] = mu_est_num/gamma_sum
-                        SIGMA_e[i][k] = sigma_est_num / \
-                            gamma_sum+np.eye(self.data_dim)*eps*10
-                    C_e[i] = C_e[i]/c_est_den
-                for s in self.states:
-                    C, MU, SIGMA = self.B[s].get_param()
-                    break_flag = break_flag and (np.abs(self.A-A_e[s]) < thresh).all() and (np.abs(C-C_e[s]) < thresh).all(
-                    ) and (np.abs(MU-MU_e[s]) < thresh).all() and (np.abs(SIGMA-SIGMA_e[s]) < thresh).all()
-                print('--> flag <--\n', break_flag)
-                print('--> A_e <--\n', A_e)
-                print('--> C_e <--\n', C_e)
-                print('--> MU_e <--\n', MU_e)
-                print('--> SIGMA_e <--\n', SIGMA_e)
-                if break_flag:
-                    return self.A, C, MU, SIGMA
-                else:
-                    self.update_param(
-                        {'A': A_e, 'B': {'C': C_e, 'MU': MU_e, 'SIGMA': SIGMA_e}})
-            return A_e, C_e, MU_e, SIGMA_e
+            self.A = np.ones((n_sts, n_sts))/n_sts
+            self.B = []
+            self.weights = np.zeros((n_sts, n_mix))
+            self.means = np.zeros((n_sts, n_mix, n_dim))
+            self.sigmas = np.zeros((n_sts, n_mix, n_dim, n_dim))
+            initkmeans = cluster.KMeans(
+                n_clusters=n_sts, random_state=self.random_state)
+            g = initkmeans.fit_predict(X)
+            cv = np.cov(X.T)+np.eye(n_dim)*self.min_cov
+            for i in self.states:
+                kmeans = cluster.KMeans(
+                    n_clusters=n_mix, random_state=self.random_state)
+                kmeans.fit(X[g == i])
+                gmm = GaussianMixtureModel(n_dim=n_dim, n_mix=n_mix)
+                sigma = np.zeros((n_mix, n_dim, n_dim))
+                sigma[:] = cv
+                weights = np.ones(n_mix)/n_mix
+                gmm.initialize(
+                    c=weights, mu=kmeans.cluster_centers_, sigma=sigma)
+                self.weights[i] = weights
+                self.means[i] = kmeans.cluster_centers_
+                self.sigmas[i] = sigma
+                self.B += [gmm]
+            self.initialized = True
         else:
-            raise Exception('No such train method')
+            return
+        return
+
+    def fit(self, X, n_iter):
+        X = check_array(X)
+        n_sts = len(self.states)
+        n_obs, n_dim = X.shape
+        n_mix = self.gmm_k
+        if self.initialized is False:
+            try:
+                self._init_param(X)
+            except:
+                raise ValueError("Problem with initialization")
+        if self.method == 'gmm':
+            for i in range(n_iter):
+                emitlogprob = self._log_emission(X)
+                logA = np.log(self.A)
+                fw = self._pass_forward(emitlogprob, logA)
+                bw = self._pass_backward(emitlogprob, logA)
+                # M-step update
+                self.start_prob = np.exp(fw[0] + bw[0])
+                self._normalize(self.start_prob, axis=0)
+                # Update A
+                logxisum = self._log_sum_xi(X, fw, bw, emitlogprob, logA)
+                xi = np.exp(logxisum)
+                new_A = xi.copy()
+                self._normalize(new_A, axis=1)
+                gamma = np.exp(self._log_gamma(X, fw, bw))
+                gamma_sum = gamma.sum(axis=0)
+                # Update Weights
+                new_weights = gamma_sum.copy()
+                self._normalize(new_weights, axis=1)
+                # Update Mean
+                means_num = np.einsum('jik,jh->ikh', gamma, X)
+                means_den = gamma_sum[:, :, None]
+                new_means = means_num/means_den
+                # Update Sigma
+                d = X[:, None, None, :] - self.means[None, :, :, :]
+                sigmas_num = np.sum(
+                    gamma[:, :, :, None, None]*(d[:, :, :, :, None]*d[:, :, :, None, :]), axis=0)
+                sigmas_den = gamma_sum[:, :, None, None]
+                new_sigmas = sigmas_num/sigmas_den
+                self._update_param(
+                    {'A': new_A, 'C': new_weights, 'MU': new_means, 'SIGMA': new_sigmas})
+        else:
+            raise ValueError(
+                "\"{0}\" method not supported".format(self.method))
+
         return
 
     def predict(self):
         pass
 
-    def update_param(self, param):
+    def _update_param(self, param):
         if self.method == "gmm":
-            self.A = param['A']
-            B = param['B']
+            self.A = param['A'].copy()
+            self.weights = param['C'].copy()
+            self.means = param['MU'].copy()
+            self.sigmas = param['SIGMA'].copy()
             for s in self.states:
                 self.B[s].set_param(
-                    B['C'][s], B['MU'][s], B['SIGMA'][s])
+                    param['C'][s].copy(), param['MU'][s].copy(), param['SIGMA'][s].copy())
         else:
             pass
         return
 
-    def emission_prob(self, obs):
-        T = len(obs)
-        ep = np.array([self.B[s].eval(obs)
-                       for s in self.states]).T
-        return ep
+    def _log_emission(self, obs):
+        n_obs, n_dim = obs.shape
+        n_sts = self.state_num
+        log_emission = np.zeros((n_obs, n_sts))
+        for s in self.states:
+            lge = self.B[s].log_eval(obs)
+            lgc = np.log(self.B[s].c)
+            log_emission[:, s] = self._lse(lge + lgc, axis=1)
+        return log_emission
 
-    def alpha(self, emission_prob):
-        # TODO: Fix numerical underflow
-        T = len(emission_prob)
-        alphas = np.zeros(emission_prob.shape)
-        alphas[0] = 1*emission_prob[0]  # setting state prior = 1
-        for t in range(1, T):
-            for s in self.states:
-                alphas[t, s] = sum([alphas[t-1, i]*self.A[i, s]
-                                    for i in self.states])*emission_prob[t, s]
-        return alphas
+    def _pass_forward(self, emitlogprob, logA):
+        n_obs, n_dim = emitlogprob.shape
+        fwlogprob = np.zeros((n_obs, n_dim))
+        temp = np.zeros(n_dim)
+        for t in range(n_obs):
+            if t == 0:
+                fwlogprob[t] = emitlogprob[t] + np.log(self.start_prob)
+            else:
+                for s in range(n_dim):
+                    for r in range(n_dim):
+                        temp[r] = fwlogprob[t-1, r] + logA[r, s]
+                    fwlogprob[t, s] = self._precision_lse(
+                        temp) + emitlogprob[t, s]
+        return fwlogprob
 
-    def normalized_alpha(self, emission_prob):
-        # TODO: Fix numerical underflow
-        T = len(emission_prob)
-        alphas = np.zeros(emission_prob.shape)
-        normalizing_constant = np.zeros(T)
-        alphas[0] = 1*emission_prob[0]  # setting state prior = 1
-        normalizing_constant[0] = np.sum(alphas[0])
-        alphas[0] = alphas[0]/normalizing_constant[0]
-        for t in range(1, T):
-            for s in self.states:
-                alphas[t, s] = sum([alphas[t-1, i]*self.A[i, s]
-                                    for i in self.states])*emission_prob[t, s]
-            normalizing_constant[t] = max(sum(alphas[t]), 0)
-            alphas[t] = alphas[t]/normalizing_constant[t]
-        return alphas, normalizing_constant
+    def _pass_backward(self, emitlogprob, logA):
+        n_obs, n_dim = emitlogprob.shape
+        bwlogprob = np.zeros((n_obs, n_dim))
+        for t in range(n_obs-2, -1, -1):
+            bwlogprob[t] = self._precision_lse(
+                bwlogprob[t+1]+emitlogprob[t+1]+logA, axis=1)
+        return bwlogprob
 
-    def beta(self, emission_prob):
-        # TODO: Fix numerical underflow
-        T = len(emission_prob)
-        betas = np.zeros(emission_prob.shape)
-        betas[T-1] = 1
-        for t in range(T-2, -1, -1):
-            betas[t] = np.sum(betas[t+1]*emission_prob[t+1]*self.A, 1)
-        return betas
+    def _log_sum_xi(self, obs, fwlogprob, bwlogprob, emitlogprob, logA):
+        n_obs, n_dim = obs.shape
+        logsumxi = np.zeros((n_dim, n_dim))
+        for i in range(n_dim):
+            for j in range(n_dim):
+                logsumxi[i, j] = self._lse(
+                    fwlogprob[:n_obs-1, i] +
+                    bwlogprob[1:, j]+emitlogprob[1:, j])+logA[i, j]
+        den = self._lse(fwlogprob[-1])
+        return logsumxi-den
 
-    def normalized_beta(self, emission_prob, normalizing_constant):
-        # TODO: Fix numerical underflow
-        T = len(emission_prob)
-        betas = np.zeros(emission_prob.shape)
-        betas[T-1] = 1
-        for t in range(T-2, -1, -1):
-            betas[t] = np.sum(betas[t+1]*emission_prob[t+1]
-                              * self.A, 1)/normalizing_constant[t]
-        return betas
+    def _log_gamma(self, obs, fwlogprob, bwlogprob):
+        n_obs, n_dim = obs.shape
+        n_mix = self.gmm_k
+        logprob = fwlogprob + bwlogprob
+        loggamma = np.zeros((n_obs, n_dim, n_mix))
+        den = self._lse(fwlogprob[0]+bwlogprob[0])
+        for s in range(n_dim):
+            logemit = self.B[s].log_eval(obs)+np.log(self.B[s].c)
+            self._log_normalize(logemit, axis=1)
+            loggamma[:, s, :] = logprob[:, s, np.newaxis] + logemit
+        return loggamma - den
 
-    def fwbw_prob(self, obs, t):
-        ep = self.emission_prob(obs)
-        fp = self.alpha(ep)
-        bp = self.beta(ep)
-        return np.dot(fp[t], bp[t])
+    def _lse(self, a, axis=None):
+        return np.log(np.sum(np.exp(a), axis=axis))
 
-    def xi(self, obs, i, j, alphas, betas):
-        # NOTE: Sum of Xi(i,j) for all t
-        print("INSIDE XI- [{0},{1}]".format(i, j))
-        print(self.B[j])
-        num = self.A[i][j]*np.dot(alphas[: -1, i]
-                                  * self.B[j].eval(obs)[1:], betas[1:, j])
-        den = np.dot(alphas[1], betas[1])
-        return num/den
+    def _precision_lse(self, a, axis=None):
+        temp = np.asarray(a, dtype=np.longdouble)
+        max = np.max(a, axis=axis)
+        return np.log(np.sum(np.exp(temp), axis=axis)/np.exp(max)) + max
 
-    def gmm_gamma(self, obs, j, k, alphas, betas, mode='sum'):
-        # NOTE: Sum of Gamma(j, k) for all
-        num1 = alphas[:, j]*betas[:, j]
-        den1 = np.dot(alphas[1], betas[1])
-        num2 = self.B[j].eval_k(obs, k)
-        den2 = self.B[j].eval(obs)
-        print("INSIDE GMM_GAMMA ({0}): \n".format(mode), den1, den2)
-        if mode == 'sum':
-            return np.dot(num1, num2/den2)/den1
-        elif mode == 'mu_est':
-            return np.dot(num1*(num2/den2), obs)/den1
-        elif mode == 'sigma_est':
-            div = obs - self.B[j].mu[k]
-            sig = np.array([np.tensordot(d, d, 0) for d in div])
-            g = num1*(num2/den2)/den1
-            return np.sum(np.array([g[i]*sig[i] for i in range(len(obs))]), 0)
-        else:
-            raise Exception('No such mode')
+    def _normalize(self, a, axis=None):
+        sum = np.sum(a, axis=axis)
+        if axis is not None:
+            sum = np.asarray(sum)
+            sum[sum == 0] = 1
+            s = list(a.shape)
+            s[axis] = 1
+            sum.shape = s
+        a /= sum
+
+    def _log_normalize(self, a, axis=None):
+        sum = self._lse(a, axis=axis)
+        if axis > 0:
+            s = list(a.shape)
+            s[axis] = 1
+            sum.shape = s
+        a -= sum
 
     def save_model(self):
         if self.initialized == False:
@@ -248,7 +255,15 @@ class HiddenMarkovModel(object):
         print(meta)
         if meta['method'] == 'gmm':
             self.states = meta['states']
-            self.initialize(method= meta['method'], data_dim=meta['data_dim'], gmm_k=meta['gmm_k'])
+            self.method = meta['method']
+            self.data_dim = meta['data_dim']
+            self.gmm_k = meta['gmm_k']
+            self.A = np.zeros((self.data_dim, self.data_dim))
+            self.B = []
+            for s in self.states:
+                gmm = GaussianMixtureModel(dim=self.data_dim, k=self.gmm_k)
+                gmm.initialize()
+                self.B += [gmm]
             param = model['param']
             self.update_param(param)
         else:

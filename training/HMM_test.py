@@ -1,64 +1,68 @@
 import numpy as np
 from HiddenMarkovModel import HiddenMarkovModel
 
+print("**********Test Tnitialization **********")
 # states = {0: 'sunny', 1: 'rain', 2: 'cloudy'}
 states = {0: 'default', 1: 'other'}
-hmm = HiddenMarkovModel(states)
-
-print("**********Test Tnitialization **********")
-hmm.initialize(data_dim=2, gmm_k=1)
-print(hmm.A, hmm.B)
+hmm = HiddenMarkovModel(states, method='gmm', data_dim=2, gmm_k=1)
 print(hmm)
 
 print("**********Test Emission Porbability **********")
-obs = [[-1, 1], [2, -2], [-3, 3], [0, 0], [
-    0, 0], [1, 0], [0, 0], [-1, 1], [3, -3]]
+# obs = [[0, 0], [0, 0], [10, 10], [10, 10], [
+#     0, 0], [10, 10], [10, 10], [0, 0], [0, 0]]
 
-# obs = [[1, 1], [1, 1], [1.1, 1], [0.9, 1], [
-#     1, 1], [1, 1], [1.2, 1], [0.8, 1], [1, 1]]
+# obs= [[-1, -1], [-2, 2], [3, 3], [-1, -1], [0, 0], [-1, 1], [3, 3], [-2, 2], [1, 0]]
 
-emission_prob = hmm.emission_prob(obs)
-print(emission_prob)
+obs = [[1, 1], [1, 1], [1.1, 1], [0.9, 1], [
+    1, 1], [1, 1], [1.2, 1], [0.8, 1], [1, 1]]
+# np.random.seed(0)
+# obs = np.ones((100000, 2))+np.random.rand(100000, 2)
+print(obs)
+
+hmm._init_param(np.array(obs))
+print(hmm.weights)
+print(hmm.means)
+print(hmm.sigmas)
+
+
+emitlogprob = hmm._log_emission(np.array(obs))
+print(emitlogprob)
+
 print("**********Test Foward Porbability **********")
-
-a = hmm.alpha(emission_prob)
+logA = np.log(hmm.A)
+a = hmm._pass_forward(emitlogprob, logA)
 print(a)
-print(sum(a[-1]))
+print('fw likelihood: ', hmm._lse(a[-1]))
 
 print("**********Test Backward Porbability **********")
-b = hmm.beta(emission_prob)
+
+b = hmm._pass_backward(emitlogprob, logA)
 print(b)
-print(np.dot(np.array([hmm.B[i].eval(obs)
-                       for i in states]).reshape(-1, len(states))[1], b[0]))
-print(hmm.fwbw_prob(obs, 1))
+print('fwbw likelihood: ', hmm._lse(a + b, 1))
 
 print("**********Test Gamma Calculation **********")
-print('Mode Sum: ', hmm.gmm_gamma(obs, 0, 0, a, b))
-print('Mode: Mu_est: ', hmm.gmm_gamma(obs, 0, 0, a, b, mode='mu_est'))
-print('Mode: Sigma_est: ', hmm.gmm_gamma(
-    obs, 0, 0, a, b, mode='sigma_est'))
+loggamma = hmm._log_gamma(np.array(obs), a, b)
+print('loggamma:\n', np.exp(loggamma))
+print(loggamma.sum(0).shape)
 
 print("**********Test Xi Calculation **********")
-print('0 to 0: ', hmm.xi(obs, 0, 0, a, b))
-print('0 to 1: ', hmm.xi(obs, 0, 1, a, b))
-# print('0 to 2: ', hmm.xi(obs, 0, 2, a, b))
-print('1 to 0: ', hmm.xi(obs, 1, 0, a, b))
-print('1 to 1: ', hmm.xi(obs, 1, 1, a, b))
-# print('1 to 2: ', hmm.xi(obs, 1, 2, a, b))
-# print('2 to 0: ', hmm.xi(obs, 2, 0, a, b))
-# print('2 to 1: ', hmm.xi(obs, 2, 1, a, b))
-# print('2 to 2: ', hmm.xi(obs, 2, 2, a, b))
+xi = hmm._log_sum_xi(np.array(obs), a, b, emitlogprob, logA)
+print(xi)
 
 print("**********Test Training Process **********")
-A, C, MU, SIGMA = hmm.train(obs, 1000, 10e-3)
+hmm.fit(obs, 2)
 print('\n=====> RESULT <=====')
-print('Transision Mat:\n', A)
-print('MEAN: \n', MU)
-print('C: \n', C)
-print('SIGMA: \n', SIGMA)
+print('Transision Mat:\n', hmm.A)
+print('C: \n', hmm.weights)
+print('MEAN: \n', hmm.means)
+print('SIGMA: \n', hmm.sigmas)
 
-emission_prob = hmm.emission_prob(obs)
-print('EMISSION: \n', emission_prob)
-a = hmm.alpha(emission_prob)
-print(a)
-print(sum(a[-1]))
+
+print("**********Test Save Model **********")
+hmm.save_model()
+
+
+print("**********Test Load Model **********")
+load_hmm = HiddenMarkovModel()
+dir = './saved_models/20200321_233110.model'
+load_hmm.load_model(dir)
