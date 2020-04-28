@@ -13,10 +13,9 @@ SAVE_DIR = os.path.join(os.path.abspath(
 
 class HiddenMarkovModel(object):
     def __init__(self, states={0: 'default'}, method='gmm',
-                 data_dim=1, gmm_k=1, random_state=0, min_cov=1e-3, n_iter=20, thresh=10e-4):
+                 gmm_k=1, random_state=0, min_cov=1e-3, n_iter=20, thresh=10e-4):
         self.states = states
         self.initialized = False
-        self.data_dim = data_dim
         self.random_state = random_state
         self.n_iter = n_iter
         self.thresh = thresh
@@ -24,7 +23,6 @@ class HiddenMarkovModel(object):
             self.method = method
             self.gmm_k = gmm_k
             self.min_cov = min_cov
-            self.start_prob = np.ones(data_dim)/data_dim
         else:
             raise Exception('No such initialization method')
         return
@@ -32,8 +30,9 @@ class HiddenMarkovModel(object):
     def _init_param(self, X):
         n_sts = len(self.states)
         n_mix = self.gmm_k
-        n_dim = self.data_dim
+        n_obs, n_dim = X.shape
         if self.method == 'gmm':
+            self.start_prob = np.ones(n_dim)/n_dim
             self.A = np.ones((n_sts, n_sts))/n_sts
             self.B = []
             self.weights = np.zeros((n_sts, n_mix))
@@ -127,7 +126,7 @@ class HiddenMarkovModel(object):
 
     def _log_emission(self, obs):
         n_obs, n_dim = obs.shape
-        n_sts = self.state_num
+        n_sts = len(self.states)
         log_emission = np.zeros((n_obs, n_sts))
         for s in self.states:
             lge = self.B[s].log_eval(obs)
@@ -157,6 +156,27 @@ class HiddenMarkovModel(object):
             bwlogprob[t] = self._precision_lse(
                 bwlogprob[t+1]+emitlogprob[t+1]+logA, axis=1)
         return bwlogprob
+
+    def _viterbi(self, emitlogprob, logA):
+        n_obs, n_dim = emitlogprob.shape
+        viterbi_prob = np.zeros((n_obs, n_dim))
+        viberbi_bt = np.zeros((n_obs, n_dim))
+        viterbi_path = np.zeros(n_obs)
+        temp = np.zeros(n_dim)
+        for t in range(n_obs):
+            if t == 0:
+                viterbi_prob[t] = emitlogprob[t]+np.log(self.start_prob)
+            else:
+                for s in range(n_dim):
+                    temp = viterbi_prob[t-1]+logA[:, s]+emitlogprob[t]
+                    viterbi_prob[t, s] = np.max(temp)
+                    viberbi_bt[t, s] = np.argmax(temp)
+        viterbi_score = np.max(viterbi_prob[-1])
+        viterbi_path[-1] = np.argmax(viterbi_prob[-1])
+        for t in range(n_obs-2, -1, -1):
+            bt_idx = viterbi_path[t+1]
+            viterbi_path[t] = viberbi_bt[t+1, int(bt_idx)]
+        return (viterbi_score, viterbi_path)
 
     def _log_sum_xi(self, obs, fwlogprob, bwlogprob, emitlogprob, logA):
         n_obs, n_dim = obs.shape
@@ -221,7 +241,7 @@ class HiddenMarkovModel(object):
             meta = {}
             meta['method'] = self.method
             meta['states'] = self.states
-            meta['data_dim'] = self.data_dim
+            meta['n_dim'] = len(self.A)
             meta['gmm_k'] = self.gmm_k
             param = {}
             param['A'] = self.A.tolist()
@@ -256,12 +276,11 @@ class HiddenMarkovModel(object):
         if meta['method'] == 'gmm':
             self.states = meta['states']
             self.method = meta['method']
-            self.data_dim = meta['data_dim']
             self.gmm_k = meta['gmm_k']
-            self.A = np.zeros((self.data_dim, self.data_dim))
+            self.A = np.zeros((meta['n_dim'], meta['n_dim']))
             self.B = []
             for s in self.states:
-                gmm = GaussianMixtureModel(dim=self.data_dim, k=self.gmm_k)
+                gmm = GaussianMixtureModel(dim=meta['n_dim'], k=self.gmm_k)
                 gmm.initialize()
                 self.B += [gmm]
             param = model['param']
